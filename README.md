@@ -151,7 +151,7 @@ Engram is being developed in phases:
 - [x] CLI framework with clap
 - [x] Core data structures (draft, worklog, summary parsing)
 - [x] `init` command implementation
-- [ ] `commit` command implementation  
+- [x] `commit` command implementation  
 - [ ] `verify` command implementation
 - [ ] Unit tests for commands
 
