@@ -122,12 +122,12 @@ pub fn run() -> io::Result<()> {
 }
 
 /// Internal verification logic that can be tested
-fn verify_chain() -> Result<VerifyResult, VerifyError> {
+pub fn verify_chain() -> Result<VerifyResult, VerifyError> {
     verify_chain_in_dir(Path::new("."))
 }
 
 /// Verification logic with configurable base directory for testing
-fn verify_chain_in_dir(base_dir: &Path) -> Result<VerifyResult, VerifyError> {
+pub fn verify_chain_in_dir(base_dir: &Path) -> Result<VerifyResult, VerifyError> {
     let engram_dir = base_dir.join(ENGRAM_DIR);
     let history_dir = base_dir.join(HISTORY_DIR);
 
