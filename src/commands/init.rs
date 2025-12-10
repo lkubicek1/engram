@@ -2,12 +2,14 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::templates::{AGENTS_TEMPLATE, DRAFT_TEMPLATE, SUMMARY_TEMPLATE};
+use crate::templates::{AGENTS_TEMPLATE, DRAFT_TEMPLATE, ROOT_DIRECTIVE_TEMPLATE, SUMMARY_TEMPLATE};
 
 /// Directory name for engram data
 const ENGRAM_DIR: &str = ".engram";
 /// Directory name for history entries
 const HISTORY_DIR: &str = "history";
+/// Marker to detect if Engram directive already exists in a file
+const ENGRAM_MARKER: &str = "Engram Protocol";
 
 #[derive(Debug, Clone, Default)]
 pub struct InitOptions {
@@ -15,6 +17,13 @@ pub struct InitOptions {
     pub junie: bool,
     pub agents: bool,
     pub all: bool,
+}
+
+impl InitOptions {
+    /// Returns true if any flag is set
+    fn any_flag_set(&self) -> bool {
+        self.warp || self.junie || self.agents || self.all
+    }
 }
 
 /// Error type for init command with specific exit codes
@@ -45,8 +54,9 @@ impl From<io::Error> for InitError {
     }
 }
 
-pub fn run(_options: InitOptions) -> io::Result<()> {
-    match run_init() {
+pub fn run(options: InitOptions) -> io::Result<()> {
+    let cwd = std::env::current_dir()?;
+    match run_init_in_dir(&cwd, options) {
         Ok(()) => Ok(()),
         Err(InitError::AlreadyInitialized) => {
             eprintln!("Error: Engram already initialized. Use --force to reinitialize.");
@@ -59,8 +69,9 @@ pub fn run(_options: InitOptions) -> io::Result<()> {
     }
 }
 
-fn run_init() -> Result<(), InitError> {
-    let cwd = std::env::current_dir()?;
+/// Internal implementation that accepts a base directory path.
+/// This is used by tests to avoid race conditions with `set_current_dir`.
+fn run_init_in_dir(cwd: &Path, options: InitOptions) -> Result<(), InitError> {
     let engram_dir = cwd.join(ENGRAM_DIR);
     let history_dir = engram_dir.join(HISTORY_DIR);
 
@@ -87,11 +98,141 @@ fn run_init() -> Result<(), InitError> {
 
     // Print success output
     println!("Initialized Engram in {}", cwd.display());
-    println!("Created: {}", relative_path(&cwd, &agents_path));
-    println!("Created: {}", relative_path(&cwd, &draft_path));
-    println!("Created: {}", relative_path(&cwd, &summary_path));
+    println!("Created: {}", relative_path(cwd, &agents_path));
+    println!("Created: {}", relative_path(cwd, &draft_path));
+    println!("Created: {}", relative_path(cwd, &summary_path));
+
+    // Handle root-level AI agent instruction files
+    handle_root_level_files(cwd, &options)?;
 
     Ok(())
+}
+
+/// Handle creation/appending of root-level AI agent instruction files
+fn handle_root_level_files(cwd: &Path, options: &InitOptions) -> Result<(), InitError> {
+    if options.any_flag_set() {
+        // Flag mode: create/append to specified files
+        if options.warp {
+            handle_warp_file(cwd)?;
+        }
+        if options.junie {
+            handle_junie_file(cwd)?;
+        }
+        if options.agents {
+            handle_root_agents_file(cwd)?;
+        }
+    } else {
+        // Detection mode: check for existing files and apply defaults
+        let warp_exists = cwd.join("WARP.md").exists();
+        let junie_dir_exists = cwd.join(".junie").exists();
+        
+        if warp_exists {
+            // WARP.md exists, append to it
+            handle_warp_file(cwd)?;
+        }
+        
+        if junie_dir_exists {
+            // .junie/ directory exists, append to guidelines.md
+            handle_junie_file(cwd)?;
+        }
+        
+        if !warp_exists && !junie_dir_exists {
+            // Neither exists, create AGENTS.md in project root by default
+            handle_root_agents_file(cwd)?;
+        }
+    }
+    
+    Ok(())
+}
+
+/// Handle WARP.md file (create or append)
+fn handle_warp_file(cwd: &Path) -> Result<(), InitError> {
+    let warp_path = cwd.join("WARP.md");
+    handle_directive_file(&warp_path, "WARP.md", "# Warp AI Instructions")
+}
+
+/// Handle .junie/guidelines.md file (create or append)
+fn handle_junie_file(cwd: &Path) -> Result<(), InitError> {
+    let junie_dir = cwd.join(".junie");
+    let guidelines_path = junie_dir.join("guidelines.md");
+    
+    // Create .junie directory if it doesn't exist
+    if !junie_dir.exists() {
+        fs::create_dir(&junie_dir)?;
+    }
+    
+    handle_directive_file(&guidelines_path, ".junie/guidelines.md", "# Junie AI Guidelines")
+}
+
+/// Handle root AGENTS.md file (create or append)
+fn handle_root_agents_file(cwd: &Path) -> Result<(), InitError> {
+    let agents_path = cwd.join("AGENTS.md");
+    handle_directive_file(&agents_path, "AGENTS.md", "# AI Agent Instructions")
+}
+
+/// Generic handler for directive files - creates or appends as needed
+fn handle_directive_file(path: &Path, display_name: &str, default_header: &str) -> Result<(), InitError> {
+    if path.exists() {
+        // File exists - check for existing directive and append if not present
+        let content = fs::read_to_string(path)?;
+        
+        // Idempotency check: don't append if directive already exists
+        if content.contains(ENGRAM_MARKER) {
+            println!("Skipped: {} (Engram directive already present)", display_name);
+            return Ok(());
+        }
+        
+        // Append directive after the first heading (if any)
+        let new_content = append_directive_after_heading(&content);
+        fs::write(path, new_content)?;
+        println!("Appended Engram directive to: {}", display_name);
+    } else {
+        // File doesn't exist - create with header and directive
+        let content = format!("{}\n\n{}", default_header, ROOT_DIRECTIVE_TEMPLATE);
+        fs::write(path, content)?;
+        println!("Created: {}", display_name);
+    }
+    
+    Ok(())
+}
+
+/// Append the directive after the first level-1 heading, or at the start if no heading found
+fn append_directive_after_heading(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    
+    // Find the first level-1 heading (starts with "# ")
+    let heading_index = lines.iter().position(|line| line.starts_with("# "));
+    
+    match heading_index {
+        Some(idx) => {
+            // Insert directive after the heading line
+            let mut result = String::new();
+            
+            // Add lines up to and including the heading
+            for line in &lines[..=idx] {
+                result.push_str(line);
+                result.push('\n');
+            }
+            
+            // Add blank line and directive
+            result.push('\n');
+            result.push_str(ROOT_DIRECTIVE_TEMPLATE);
+            
+            // Add remaining content
+            if idx + 1 < lines.len() {
+                for line in &lines[idx + 1..] {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+            
+            result
+        }
+        None => {
+            // No heading found, prepend directive
+            format!("{}\n{}", ROOT_DIRECTIVE_TEMPLATE, content)
+        }
+    }
 }
 
 /// Helper to display relative path from current directory
@@ -110,9 +251,8 @@ mod tests {
     #[test]
     fn test_init_creates_directory_structure() {
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(result.is_ok());
 
         // Verify directory structure
@@ -125,9 +265,8 @@ mod tests {
     #[test]
     fn test_init_creates_agents_md() {
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(result.is_ok());
 
         let agents_path = temp_dir.path().join(".engram/AGENTS.md");
@@ -139,9 +278,8 @@ mod tests {
     #[test]
     fn test_init_creates_draft_md() {
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(result.is_ok());
 
         let draft_path = temp_dir.path().join(".engram/draft.md");
@@ -156,9 +294,8 @@ mod tests {
     #[test]
     fn test_init_creates_summary_md() {
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(result.is_ok());
 
         let summary_path = temp_dir.path().join(".engram/history/SUMMARY.md");
@@ -170,27 +307,218 @@ mod tests {
     #[test]
     fn test_init_idempotency_check() {
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
         // First init should succeed
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(result.is_ok());
 
         // Second init should fail with AlreadyInitialized
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(matches!(result, Err(InitError::AlreadyInitialized)));
     }
 
     #[test]
     fn test_init_fails_if_engram_dir_exists() {
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
         // Manually create .engram directory
         fs::create_dir(temp_dir.path().join(".engram")).unwrap();
 
         // Init should fail
-        let result = run_init();
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(matches!(result, Err(InitError::AlreadyInitialized)));
+    }
+
+    // === New tests for Phase 2 Task 2: Init extensions ===
+
+    #[test]
+    fn test_init_with_warp_flag_creates_warp_md() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let options = InitOptions {
+            warp: true,
+            ..Default::default()
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        let warp_path = temp_dir.path().join("WARP.md");
+        assert!(warp_path.exists());
+        let content = fs::read_to_string(&warp_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+        assert!(content.contains("# Warp AI Instructions"));
+    }
+
+    #[test]
+    fn test_init_with_junie_flag_creates_guidelines_md() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let options = InitOptions {
+            junie: true,
+            ..Default::default()
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        let guidelines_path = temp_dir.path().join(".junie/guidelines.md");
+        assert!(guidelines_path.exists());
+        let content = fs::read_to_string(&guidelines_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+        assert!(content.contains("# Junie AI Guidelines"));
+    }
+
+    #[test]
+    fn test_init_with_agents_flag_creates_root_agents_md() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let options = InitOptions {
+            agents: true,
+            ..Default::default()
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        let agents_path = temp_dir.path().join("AGENTS.md");
+        assert!(agents_path.exists());
+        let content = fs::read_to_string(&agents_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+        assert!(content.contains("# AI Agent Instructions"));
+    }
+
+    #[test]
+    fn test_init_with_all_flag_creates_all_files() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let options = InitOptions {
+            all: true,
+            warp: true,
+            junie: true,
+            agents: true,
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        // Check all three files exist
+        assert!(temp_dir.path().join("WARP.md").exists());
+        assert!(temp_dir.path().join(".junie/guidelines.md").exists());
+        assert!(temp_dir.path().join("AGENTS.md").exists());
+    }
+
+    #[test]
+    fn test_init_appends_to_existing_warp_md() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create existing WARP.md
+        let warp_path = temp_dir.path().join("WARP.md");
+        fs::write(&warp_path, "# My Warp Instructions\n\nSome existing content.\n").unwrap();
+
+        let options = InitOptions {
+            warp: true,
+            ..Default::default()
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(&warp_path).unwrap();
+        assert!(content.contains("# My Warp Instructions"));
+        assert!(content.contains("Engram Protocol"));
+        assert!(content.contains("Some existing content."));
+    }
+
+    #[test]
+    fn test_init_idempotency_skips_if_directive_exists() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create existing WARP.md with Engram Protocol already present
+        let warp_path = temp_dir.path().join("WARP.md");
+        fs::write(&warp_path, "# Warp\n\n## Engram Protocol\n\nAlready here.\n").unwrap();
+
+        let options = InitOptions {
+            warp: true,
+            ..Default::default()
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        // Content should not be duplicated
+        let content = fs::read_to_string(&warp_path).unwrap();
+        let count = content.matches("Engram Protocol").count();
+        assert_eq!(count, 1, "Directive should not be duplicated");
+    }
+
+    #[test]
+    fn test_init_detection_mode_with_existing_warp() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create existing WARP.md (detection mode should append to it)
+        let warp_path = temp_dir.path().join("WARP.md");
+        fs::write(&warp_path, "# Warp\n\nExisting content.\n").unwrap();
+
+        // No flags - detection mode
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
+        assert!(result.is_ok());
+
+        // WARP.md should have directive appended
+        let content = fs::read_to_string(&warp_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+
+        // Root AGENTS.md should NOT be created (WARP.md exists)
+        assert!(!temp_dir.path().join("AGENTS.md").exists());
+    }
+
+    #[test]
+    fn test_init_detection_mode_with_existing_junie_dir() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create existing .junie directory (detection mode should create guidelines.md)
+        fs::create_dir(temp_dir.path().join(".junie")).unwrap();
+
+        // No flags - detection mode
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
+        assert!(result.is_ok());
+
+        // guidelines.md should be created with directive
+        let guidelines_path = temp_dir.path().join(".junie/guidelines.md");
+        assert!(guidelines_path.exists());
+        let content = fs::read_to_string(&guidelines_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+
+        // Root AGENTS.md should NOT be created (.junie exists)
+        assert!(!temp_dir.path().join("AGENTS.md").exists());
+    }
+
+    #[test]
+    fn test_init_detection_mode_default_creates_root_agents() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // No flags, no existing WARP.md or .junie - should create root AGENTS.md
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
+        assert!(result.is_ok());
+
+        let agents_path = temp_dir.path().join("AGENTS.md");
+        assert!(agents_path.exists());
+        let content = fs::read_to_string(&agents_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+    }
+
+    #[test]
+    fn test_append_directive_after_heading() {
+        let content = "# My Title\n\nSome content here.\n\n## Section\n\nMore content.\n";
+        let result = append_directive_after_heading(content);
+        
+        // Should have heading first, then directive, then rest of content
+        assert!(result.starts_with("# My Title\n"));
+        assert!(result.contains("Engram Protocol"));
+        assert!(result.contains("Some content here."));
+    }
+
+    #[test]
+    fn test_append_directive_no_heading() {
+        let content = "Just some content without a heading.\n";
+        let result = append_directive_after_heading(content);
+        
+        // Directive should be prepended
+        assert!(result.starts_with("## 🔒 Engram Protocol"));
+        assert!(result.contains("Just some content without a heading."));
     }
 }

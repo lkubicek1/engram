@@ -157,7 +157,7 @@ Engram is being developed in phases:
 
 ### Phase 2: Polish
 - [x] `status` command
-- [ ] `init` append logic for WARP.md, AGENTS.md, .junie/guidelines.md
+- [x] `init` append logic for WARP.md, AGENTS.md, .junie/guidelines.md
 - [ ] Idempotency checks
 - [ ] Error messages and user feedback
 - [ ] Integration tests
