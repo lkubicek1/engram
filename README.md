@@ -158,9 +158,9 @@ Engram is being developed in phases:
 ### Phase 2: Polish
 - [x] `status` command
 - [x] `init` append logic for WARP.md, AGENTS.md, .junie/guidelines.md
-- [ ] Idempotency checks
-- [ ] Error messages and user feedback
-- [ ] Integration tests
+- [x] Idempotency checks
+- [x] Error messages and user feedback
+- [x] Integration tests
 
 ### Phase 3: Distribution
 - [ ] GitHub Actions workflow
