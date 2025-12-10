@@ -153,7 +153,7 @@ Engram is being developed in phases:
 - [x] `init` command implementation
 - [x] `commit` command implementation  
 - [x] `verify` command implementation
-- [ ] Unit tests for commands
+- [x] Unit tests for commands
 
 ### Phase 2: Polish
 - [ ] `status` command
