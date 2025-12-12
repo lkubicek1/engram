@@ -106,6 +106,19 @@ fn test_init_with_warp_flag() {
 }
 
 #[test]
+fn test_init_with_claude_flag() {
+    let dir = tempdir().unwrap();
+
+    let output = run_engram(dir.path(), &["init", "--claude"]);
+
+    assert!(output.status.success());
+    assert!(dir.path().join("CLAUDE.md").exists());
+
+    let content = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    assert!(content.contains("Engram Protocol"));
+}
+
+#[test]
 fn test_init_with_junie_flag() {
     let dir = tempdir().unwrap();
 
@@ -139,6 +152,7 @@ fn test_init_with_all_flag() {
 
     assert!(output.status.success());
     assert!(dir.path().join("WARP.md").exists());
+    assert!(dir.path().join("CLAUDE.md").exists());
     assert!(dir.path().join(".junie/guidelines.md").exists());
     assert!(dir.path().join("AGENTS.md").exists());
 }
@@ -573,7 +587,7 @@ fn test_version_flag() {
 
     let stdout = stdout_str(&output);
     assert!(stdout.contains("engram"));
-    assert!(stdout.contains("0.1.0"));
+    assert!(stdout.contains("0.1.1"));
 }
 
 #[test]

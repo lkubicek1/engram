@@ -17,6 +17,7 @@ const ENGRAM_MARKER: &str = "Engram Protocol";
 #[derive(Debug, Clone, Default)]
 pub struct InitOptions {
     pub warp: bool,
+    pub claude: bool,
     pub junie: bool,
     pub agents: bool,
     pub all: bool,
@@ -25,7 +26,7 @@ pub struct InitOptions {
 impl InitOptions {
     /// Returns true if any flag is set
     fn any_flag_set(&self) -> bool {
-        self.warp || self.junie || self.agents || self.all
+        self.warp || self.claude || self.junie || self.agents || self.all
     }
 }
 
@@ -154,6 +155,9 @@ fn handle_root_level_files(cwd: &Path, options: &InitOptions) -> Result<(), Init
         if options.warp {
             handle_warp_file(cwd)?;
         }
+        if options.claude {
+            handle_claude_file(cwd)?;
+        }
         if options.junie {
             handle_junie_file(cwd)?;
         }
@@ -163,6 +167,7 @@ fn handle_root_level_files(cwd: &Path, options: &InitOptions) -> Result<(), Init
     } else {
         // Detection mode: check for existing files and apply defaults
         let warp_exists = cwd.join("WARP.md").exists();
+        let claude_exists = cwd.join("CLAUDE.md").exists();
         let junie_dir_exists = cwd.join(".junie").exists();
 
         if warp_exists {
@@ -170,13 +175,18 @@ fn handle_root_level_files(cwd: &Path, options: &InitOptions) -> Result<(), Init
             handle_warp_file(cwd)?;
         }
 
+        if claude_exists {
+            // CLAUDE.md exists, append to it
+            handle_claude_file(cwd)?;
+        }
+
         if junie_dir_exists {
             // .junie/ directory exists, append to guidelines.md
             handle_junie_file(cwd)?;
         }
 
-        if !warp_exists && !junie_dir_exists {
-            // Neither exists, create AGENTS.md in project root by default
+        if !warp_exists && !claude_exists && !junie_dir_exists {
+            // None exist, create AGENTS.md in project root by default
             handle_root_agents_file(cwd)?;
         }
     }
@@ -188,6 +198,12 @@ fn handle_root_level_files(cwd: &Path, options: &InitOptions) -> Result<(), Init
 fn handle_warp_file(cwd: &Path) -> Result<(), InitError> {
     let warp_path = cwd.join("WARP.md");
     handle_directive_file(&warp_path, "WARP.md", "# Warp AI Instructions")
+}
+
+/// Handle CLAUDE.md file (create or append)
+fn handle_claude_file(cwd: &Path) -> Result<(), InitError> {
+    let claude_path = cwd.join("CLAUDE.md");
+    handle_directive_file(&claude_path, "CLAUDE.md", "# Claude AI Instructions")
 }
 
 /// Handle .junie/guidelines.md file (create or append)
@@ -464,6 +480,24 @@ mod tests {
     }
 
     #[test]
+    fn test_init_with_claude_flag_creates_claude_md() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let options = InitOptions {
+            claude: true,
+            ..Default::default()
+        };
+        let result = run_init_in_dir(temp_dir.path(), options);
+        assert!(result.is_ok());
+
+        let claude_path = temp_dir.path().join("CLAUDE.md");
+        assert!(claude_path.exists());
+        let content = fs::read_to_string(&claude_path).unwrap();
+        assert!(content.contains("Engram Protocol"));
+        assert!(content.contains("# Claude AI Instructions"));
+    }
+
+    #[test]
     fn test_init_with_junie_flag_creates_guidelines_md() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -506,14 +540,16 @@ mod tests {
         let options = InitOptions {
             all: true,
             warp: true,
+            claude: true,
             junie: true,
             agents: true,
         };
         let result = run_init_in_dir(temp_dir.path(), options);
         assert!(result.is_ok());
 
-        // Check all three files exist
+        // Check all files exist
         assert!(temp_dir.path().join("WARP.md").exists());
+        assert!(temp_dir.path().join("CLAUDE.md").exists());
         assert!(temp_dir.path().join(".junie/guidelines.md").exists());
         assert!(temp_dir.path().join("AGENTS.md").exists());
     }
@@ -606,6 +642,27 @@ mod tests {
         assert!(content.contains("Engram Protocol"));
 
         // Root AGENTS.md should NOT be created (.junie exists)
+        assert!(!temp_dir.path().join("AGENTS.md").exists());
+    }
+
+    #[test]
+    fn test_init_detection_mode_with_existing_claude() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create existing CLAUDE.md (detection mode should append to it)
+        let claude_path = temp_dir.path().join("CLAUDE.md");
+        fs::write(&claude_path, "# Claude\n\nExisting content.\n").unwrap();
+
+        // No flags - detection mode
+        let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
+        assert!(result.is_ok());
+
+        // CLAUDE.md should have directive appended
+        let content = fs::read_to_string(&claude_path).unwrap();
+        assert!(content.contains("Existing content"));
+        assert!(content.contains("Engram Protocol"));
+
+        // Root AGENTS.md should NOT be created (CLAUDE.md exists)
         assert!(!temp_dir.path().join("AGENTS.md").exists());
     }
 

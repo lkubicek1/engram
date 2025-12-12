@@ -52,7 +52,7 @@ Common options:
 
 ```bash
 # Install a specific version
-ENGRAM_VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/lkubicek1/engram/main/install.sh | sh
+ENGRAM_VERSION=0.1.1 curl -fsSL https://raw.githubusercontent.com/lkubicek1/engram/main/install.sh | sh
 
 # Install to a custom directory
 INSTALL_DIR="$HOME/bin" curl -fsSL https://raw.githubusercontent.com/lkubicek1/engram/main/install.sh | sh
@@ -87,6 +87,7 @@ This creates `.engram/` plus per-repo wrapper scripts (`./engram` and `engram.cm
 Directive options (optional):
 
 - `--warp` creates/appends `WARP.md`
+- `--claude` creates/appends `CLAUDE.md`
 - `--junie` creates/appends `.junie/guidelines.md`
 - `--agents` creates/appends `AGENTS.md`
 - `--all` applies all of the above

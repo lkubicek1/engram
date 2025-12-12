@@ -24,6 +24,9 @@ EXAMPLES:
     Initialize with Warp AI directive:
         $ engram init --warp
 
+    Initialize with Claude AI directive:
+        $ engram init --claude
+
     Initialize with all AI agent directives:
         $ engram init --all
 
@@ -85,6 +88,9 @@ EXAMPLES:
     Initialize with Warp AI support:
         $ engram init --warp
 
+    Initialize with Claude AI support:
+        $ engram init --claude
+
     Initialize with Junie AI support:
         $ engram init --junie
 
@@ -98,6 +104,13 @@ EXAMPLES:
             help = "Create or append to WARP.md with Engram protocol directive"
         )]
         warp: bool,
+
+        /// Create/append CLAUDE.md with Engram directive for Claude
+        #[arg(
+            long,
+            help = "Create or append to CLAUDE.md with Engram protocol directive"
+        )]
+        claude: bool,
 
         /// Create/append .junie/guidelines.md with Engram directive for Junie AI
         #[arg(
@@ -113,10 +126,10 @@ EXAMPLES:
         )]
         agents: bool,
 
-        /// Apply all directive options (--warp, --junie, --agents)
+        /// Apply all directive options (--warp, --claude, --junie, --agents)
         #[arg(
             long,
-            help = "Create/append all AI agent directive files (WARP.md, .junie/guidelines.md, AGENTS.md)"
+            help = "Create/append all AI agent directive files (WARP.md, CLAUDE.md, .junie/guidelines.md, AGENTS.md)"
         )]
         all: bool,
     },
@@ -218,12 +231,14 @@ fn main() {
     let result = match cli.command {
         Commands::Init {
             warp,
+            claude,
             junie,
             agents,
             all,
         } => {
             let options = commands::init::InitOptions {
                 warp: warp || all,
+                claude: claude || all,
                 junie: junie || all,
                 agents: agents || all,
                 all,
