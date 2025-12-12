@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.asset }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: engram-linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: engram-darwin-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: engram-darwin-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: engram-windows-x86_64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          BIN="target/${{ matrix.target }}/release/engram"
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            BIN="${BIN}.exe"
+          fi
+          cp "$BIN" "dist/${{ matrix.asset }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist -type f -maxdepth 2 -mindepth 2 -exec mv {} dist/ \;
+          find dist -type d -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum engram-* > checksums.txt
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/engram-*
+            dist/checksums.txt

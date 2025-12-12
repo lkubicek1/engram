@@ -12,13 +12,6 @@ pub fn parse_previous_hash(content: &str) -> Option<String> {
     None
 }
 
-/// Extract the hash portion from a historic worklog entry filename
-/// Pattern: NNN_HHHHHHHH.md
-pub fn extract_hash_from_filename(filename: &str) -> Option<String> {
-    let re = Regex::new(r"^\d{3}_([a-f0-9]{8})\.md$").unwrap();
-    re.captures(filename).map(|c| c[1].to_string())
-}
-
 /// Parse the Summary from entry content
 pub fn parse_summary(content: &str) -> Option<String> {
     let re = Regex::new(r"^Summary: (.+)$").unwrap();
@@ -67,22 +60,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_hash_from_filename() {
-        assert_eq!(
-            extract_hash_from_filename("002_e5f6a7b8.md"),
-            Some("e5f6a7b8".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_hash_from_filename_invalid() {
-        assert_eq!(extract_hash_from_filename("invalid.md"), None);
-        assert_eq!(extract_hash_from_filename("SUMMARY.md"), None);
-    }
-
-    #[test]
     fn test_parse_summary() {
-        let content = "Summary: Added JWT authentication\nPrevious: none\nDate: 2025-06-12T14:32:07Z";
+        let content =
+            "Summary: Added JWT authentication\nPrevious: none\nDate: 2025-06-12T14:32:07Z";
         assert_eq!(
             parse_summary(content),
             Some("Added JWT authentication".to_string())

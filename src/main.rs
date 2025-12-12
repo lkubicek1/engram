@@ -72,8 +72,8 @@ Initialize Engram in the current directory.
 Creates the .engram/ directory structure with:
   • .engram/AGENTS.md     - Protocol instructions for AI agents
   • .engram/draft.md      - Agent workspace (mutable, reset after commit)
-  • .engram/history/      - Hash-linked entry storage
-  • .engram/history/SUMMARY.md - Quick-reference index
+  • .engram/worklog/      - Hash-linked entry storage
+  • .engram/worklog/SUMMARY.md - Quick-reference index
 
 Optionally creates root-level AI agent instruction files with the Engram 
 protocol directive. Use flags to specify which files to create/update.",
@@ -93,29 +93,41 @@ EXAMPLES:
     )]
     Init {
         /// Create/append WARP.md with Engram directive for Warp AI
-        #[arg(long, help = "Create or append to WARP.md with Engram protocol directive")]
+        #[arg(
+            long,
+            help = "Create or append to WARP.md with Engram protocol directive"
+        )]
         warp: bool,
-        
+
         /// Create/append .junie/guidelines.md with Engram directive for Junie AI
-        #[arg(long, help = "Create or append to .junie/guidelines.md with Engram protocol directive")]
+        #[arg(
+            long,
+            help = "Create or append to .junie/guidelines.md with Engram protocol directive"
+        )]
         junie: bool,
-        
+
         /// Create/append AGENTS.md with Engram directive in project root
-        #[arg(long, help = "Create or append to AGENTS.md with Engram protocol directive")]
+        #[arg(
+            long,
+            help = "Create or append to AGENTS.md with Engram protocol directive"
+        )]
         agents: bool,
-        
+
         /// Apply all directive options (--warp, --junie, --agents)
-        #[arg(long, help = "Create/append all AI agent directive files (WARP.md, .junie/guidelines.md, AGENTS.md)")]
+        #[arg(
+            long,
+            help = "Create/append all AI agent directive files (WARP.md, .junie/guidelines.md, AGENTS.md)"
+        )]
         all: bool,
     },
-    
+
     /// Commit the current draft to the hash-linked history
     #[command(
         long_about = "\
 Commit the current draft to the hash-linked history.
 
 Reads .engram/draft.md, extracts the summary and body content, then creates 
-a new entry in .engram/history/ with:
+a new entry in .engram/worklog/ with:
   • The summary from the <summary> tag
   • A SHA256 hash link to the previous entry
   • An ISO-8601 timestamp
@@ -138,13 +150,13 @@ OUTPUT:
     Previous: a1b2c3d4..."
     )]
     Commit,
-    
+
     /// Verify the integrity of the hash chain
     #[command(
         long_about = "\
 Verify the integrity of the hash chain.
 
-Checks that each entry in .engram/history/ correctly links to the previous 
+Checks that each entry in .engram/worklog/ correctly links to the previous 
 entry via SHA256 hash. Also verifies that each filename's hash matches the 
 file's actual content hash.
 
@@ -169,14 +181,14 @@ OUTPUT (failure):
     Found Previous:    0000000000000000..."
     )]
     Verify,
-    
+
     /// Display current Engram state and status
     #[command(
         long_about = "\
 Display current Engram state and status.
 
 Shows a summary of the current Engram state including:
-  • Number of entries in history
+  • Number of entries in worklog
   • Latest entry filename, date, and summary
   • Draft status (empty or has uncommitted content)
   • Chain verification status",
@@ -202,9 +214,14 @@ OUTPUT:
 
 fn main() {
     let cli = Cli::parse();
-    
+
     let result = match cli.command {
-        Commands::Init { warp, junie, agents, all } => {
+        Commands::Init {
+            warp,
+            junie,
+            agents,
+            all,
+        } => {
             let options = commands::init::InitOptions {
                 warp: warp || all,
                 junie: junie || all,
@@ -213,17 +230,11 @@ fn main() {
             };
             commands::init::run(options)
         }
-        Commands::Commit => {
-            commands::commit::run()
-        }
-        Commands::Verify => {
-            commands::verify::run()
-        }
-        Commands::Status => {
-            commands::status::run()
-        }
+        Commands::Commit => commands::commit::run(),
+        Commands::Verify => commands::verify::run(),
+        Commands::Status => commands::status::run(),
     };
-    
+
     if let Err(e) = result {
         eprintln!("Error: {}", e);
         std::process::exit(1);

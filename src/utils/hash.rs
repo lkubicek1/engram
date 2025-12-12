@@ -1,4 +1,4 @@
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Compute SHA256 hash of content and return as lowercase hex string
 pub fn sha256_hex(content: &str) -> String {
@@ -22,7 +22,10 @@ mod tests {
         let hash = sha256_hex("hello world");
         assert_eq!(hash.len(), 64);
         // Known SHA256 hash for "hello world"
-        assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 
     #[test]
@@ -35,6 +38,9 @@ mod tests {
     #[test]
     fn test_sha256_empty() {
         let hash = sha256_hex("");
-        assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 }

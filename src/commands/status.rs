@@ -9,7 +9,7 @@ use crate::engram::worklog::WorklogEntry;
 
 const ENGRAM_DIR: &str = ".engram";
 const DRAFT_FILE: &str = ".engram/draft.md";
-const HISTORY_DIR: &str = ".engram/history";
+const WORKLOG_DIR: &str = ".engram/worklog";
 
 pub fn run() -> io::Result<()> {
     run_status_in_dir(Path::new("."))
@@ -18,7 +18,7 @@ pub fn run() -> io::Result<()> {
 fn run_status_in_dir(base_dir: &Path) -> io::Result<()> {
     let engram_dir = base_dir.join(ENGRAM_DIR);
     let draft_file = base_dir.join(DRAFT_FILE);
-    let history_dir = base_dir.join(HISTORY_DIR);
+    let worklog_dir = base_dir.join(WORKLOG_DIR);
 
     // Check if engram is initialized
     if !engram_dir.exists() {
@@ -32,14 +32,22 @@ fn run_status_in_dir(base_dir: &Path) -> io::Result<()> {
     println!("Engram Status");
     println!("─────────────");
 
-    // Get history info
-    let (entry_count, latest_entry) = get_history_info(&history_dir)?;
-    println!("History: {} entries", entry_count);
+    // Validate worklog directory exists
+    if !worklog_dir.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Engram not initialized. Run `engram init` first.",
+        ));
+    }
+
+    // Get worklog info
+    let info = get_worklog_info(&worklog_dir)?;
+    println!("Worklog: {} entries", info.entry_count);
 
     // Display latest entry info if available
-    if let Some((filename, date, summary)) = latest_entry {
-        println!("Latest:  {} ({})", filename, date);
-        println!("         \"{}\"", summary);
+    if let Some(latest) = info.latest {
+        println!("Latest:  {} ({})", latest.filename, latest.date);
+        println!("         \"{}\"", latest.summary);
     }
 
     println!();
@@ -79,7 +87,7 @@ fn run_status_in_dir(base_dir: &Path) -> io::Result<()> {
 
 /// Status of the draft file
 enum DraftStatus {
-    HasContent(String),  // Contains the summary
+    HasContent(String), // Contains the summary
     Empty,
     NotFound,
 }
@@ -101,20 +109,34 @@ fn get_draft_status(draft_path: &Path) -> DraftStatus {
     }
 }
 
-/// Get history information: entry count and latest entry details
-fn get_history_info(history_path: &Path) -> io::Result<(usize, Option<(String, String, String)>)> {
-    if !history_path.exists() {
-        return Ok((0, None));
+struct LatestWorklogEntry {
+    filename: String,
+    date: String,
+    summary: String,
+}
+
+struct WorklogInfo {
+    entry_count: usize,
+    latest: Option<LatestWorklogEntry>,
+}
+
+/// Get worklog information: entry count and latest entry details
+fn get_worklog_info(worklog_path: &Path) -> io::Result<WorklogInfo> {
+    if !worklog_path.exists() {
+        return Ok(WorklogInfo {
+            entry_count: 0,
+            latest: None,
+        });
     }
 
     let mut entries: Vec<WorklogEntry> = Vec::new();
 
-    for dir_entry in fs::read_dir(history_path)? {
+    for dir_entry in fs::read_dir(worklog_path)? {
         let dir_entry = dir_entry?;
         let filename = dir_entry.file_name();
         let filename_str = filename.to_string_lossy();
 
-        if let Some(entry) = WorklogEntry::from_filename(&filename_str, &history_path.to_path_buf()) {
+        if let Some(entry) = WorklogEntry::from_filename(&filename_str, worklog_path) {
             entries.push(entry);
         }
     }
@@ -122,7 +144,10 @@ fn get_history_info(history_path: &Path) -> io::Result<(usize, Option<(String, S
     let entry_count = entries.len();
 
     if entries.is_empty() {
-        return Ok((0, None));
+        return Ok(WorklogInfo {
+            entry_count: 0,
+            latest: None,
+        });
     }
 
     // Sort by sequence number descending to get the latest
@@ -134,21 +159,28 @@ fn get_history_info(history_path: &Path) -> io::Result<(usize, Option<(String, S
     let date = parse_date(&content).unwrap_or_else(|| "unknown".to_string());
     let summary = parse_summary(&content).unwrap_or_else(|| "No summary".to_string());
 
-    Ok((entry_count, Some((latest.filename.clone(), date, summary))))
+    Ok(WorklogInfo {
+        entry_count,
+        latest: Some(LatestWorklogEntry {
+            filename: latest.filename.clone(),
+            date,
+            summary,
+        }),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::hash::sha256_short;
     use std::fs;
     use tempfile::tempdir;
-    use crate::utils::hash::sha256_short;
 
     #[test]
     fn test_get_draft_status_not_found() {
         let dir = tempdir().unwrap();
         let draft_path = dir.path().join("draft.md");
-        
+
         let status = get_draft_status(&draft_path);
         assert!(matches!(status, DraftStatus::NotFound));
     }
@@ -157,10 +189,10 @@ mod tests {
     fn test_get_draft_status_empty() {
         let dir = tempdir().unwrap();
         let draft_path = dir.path().join("draft.md");
-        
+
         // Empty summary in draft
         fs::write(&draft_path, "<summary></summary>\n\n<!-- comments only -->").unwrap();
-        
+
         let status = get_draft_status(&draft_path);
         assert!(matches!(status, DraftStatus::Empty));
     }
@@ -169,9 +201,13 @@ mod tests {
     fn test_get_draft_status_has_content() {
         let dir = tempdir().unwrap();
         let draft_path = dir.path().join("draft.md");
-        
-        fs::write(&draft_path, "<summary>Test summary</summary>\n\n## Intent\nSome content").unwrap();
-        
+
+        fs::write(
+            &draft_path,
+            "<summary>Test summary</summary>\n\n## Intent\nSome content",
+        )
+        .unwrap();
+
         let status = get_draft_status(&draft_path);
         match status {
             DraftStatus::HasContent(summary) => assert_eq!(summary, "Test summary"),
@@ -185,9 +221,9 @@ mod tests {
         let history_path = dir.path().join("history");
         fs::create_dir(&history_path).unwrap();
 
-        let (count, latest) = get_history_info(&history_path).unwrap();
-        assert_eq!(count, 0);
-        assert!(latest.is_none());
+        let info = get_worklog_info(&history_path).unwrap();
+        assert_eq!(info.entry_count, 0);
+        assert!(info.latest.is_none());
     }
 
     #[test]
@@ -197,24 +233,25 @@ mod tests {
         fs::create_dir(&history_path).unwrap();
 
         // Create first entry
-        let content1 = "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody 1";
+        let content1 =
+            "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody 1";
         let short_hash1 = sha256_short(content1);
-        let filename1 = format!("001_{}.md", short_hash1);
+        let filename1 = format!("000001_{}.md", short_hash1);
         fs::write(history_path.join(&filename1), content1).unwrap();
 
         // Create second entry
         let content2 = "Summary: Second entry\nPrevious: somehash\nDate: 2025-06-13T10:00:00Z\n\n---\n\nBody 2";
         let short_hash2 = sha256_short(content2);
-        let filename2 = format!("002_{}.md", short_hash2);
+        let filename2 = format!("000002_{}.md", short_hash2);
         fs::write(history_path.join(&filename2), content2).unwrap();
 
-        let (count, latest) = get_history_info(&history_path).unwrap();
-        assert_eq!(count, 2);
-        
-        let (filename, date, summary) = latest.unwrap();
-        assert_eq!(filename, filename2);
-        assert_eq!(date, "2025-06-13T10:00:00Z");
-        assert_eq!(summary, "Second entry");
+        let info = get_worklog_info(&history_path).unwrap();
+        assert_eq!(info.entry_count, 2);
+
+        let latest = info.latest.unwrap();
+        assert_eq!(latest.filename, filename2);
+        assert_eq!(latest.date, "2025-06-13T10:00:00Z");
+        assert_eq!(latest.summary, "Second entry");
     }
 
     #[test]
@@ -235,7 +272,11 @@ mod tests {
 
     fn setup_engram_dir(base: &Path) {
         fs::create_dir(base.join(".engram")).unwrap();
-        fs::create_dir(base.join(".engram/history")).unwrap();
-        fs::write(base.join(".engram/draft.md"), "<summary></summary>\n\n## Intent\n<!-- comment -->").unwrap();
+        fs::create_dir(base.join(".engram/worklog")).unwrap();
+        fs::write(
+            base.join(".engram/draft.md"),
+            "<summary></summary>\n\n## Intent\n<!-- comment -->",
+        )
+        .unwrap();
     }
 }

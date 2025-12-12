@@ -37,25 +37,26 @@ impl Draft {
         // Extract <summary>...</summary>
         let re = Regex::new(r"<summary>(.*?)</summary>").unwrap();
         let caps = re.captures(content).ok_or(DraftError::MissingSummaryTag)?;
-        
+
         let summary = caps[1].trim().to_string();
         if summary.is_empty() {
             return Err(DraftError::EmptySummary);
         }
-        
+
         // Extract body after </summary>
-        let body_start = content.find("</summary>")
+        let body_start = content
+            .find("</summary>")
             .map(|i| i + "</summary>".len())
             .unwrap_or(0);
-        
+
         let body = content[body_start..].trim().to_string();
-        
+
         // Check if body has content beyond template comments
         let body_without_comments = remove_html_comments(&body);
         if body_without_comments.trim().is_empty() {
             return Err(DraftError::EmptyBody);
         }
-        
+
         Ok(Draft { summary, body })
     }
 }
@@ -81,7 +82,7 @@ This is the intent section.
 
 ## Verification
 Ran tests."#;
-        
+
         let draft = Draft::parse(content).unwrap();
         assert_eq!(draft.summary, "Added new feature");
         assert!(draft.body.contains("Intent"));

@@ -11,8 +11,8 @@ use crate::utils::hash::{sha256_hex, sha256_short};
 
 const ENGRAM_DIR: &str = ".engram";
 const DRAFT_FILE: &str = ".engram/draft.md";
-const HISTORY_DIR: &str = ".engram/history";
-const SUMMARY_FILE: &str = ".engram/history/SUMMARY.md";
+const WORKLOG_DIR: &str = ".engram/worklog";
+const SUMMARY_FILE: &str = ".engram/worklog/SUMMARY.md";
 
 /// Result of a successful commit operation
 #[derive(Debug)]
@@ -48,7 +48,7 @@ fn run_commit() -> io::Result<CommitResult> {
 fn run_commit_in_dir(base_dir: &Path) -> io::Result<CommitResult> {
     let engram_dir = base_dir.join(ENGRAM_DIR);
     let draft_file = base_dir.join(DRAFT_FILE);
-    let history_dir = base_dir.join(HISTORY_DIR);
+    let worklog_dir = base_dir.join(WORKLOG_DIR);
     let summary_file = base_dir.join(SUMMARY_FILE);
 
     // 1. Validate environment
@@ -66,17 +66,24 @@ fn run_commit_in_dir(base_dir: &Path) -> io::Result<CommitResult> {
         ));
     }
 
-    // 2. Parse draft.md
+    // 2. Validate worklog directory exists
+    if !worklog_dir.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Engram not initialized. Run `engram init` first.",
+        ));
+    }
+
+    // 3. Parse draft.md
     let draft_content = fs::read_to_string(&draft_file)?;
-    let draft = Draft::parse(&draft_content).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-    })?;
+    let draft = Draft::parse(&draft_content)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-    // 3. Determine sequence number
-    let sequence = get_next_sequence(&history_dir)?;
+    // 4. Determine sequence number
+    let sequence = get_next_sequence(&worklog_dir)?;
 
-    // 4. Compute previous hash
-    let prev_hash = get_previous_hash(&history_dir, sequence)?;
+    // 5. Compute previous hash
+    let prev_hash = get_previous_hash(&worklog_dir, sequence)?;
 
     // 5. Build entry content
     let entry = EntryContent {
@@ -90,9 +97,9 @@ fn run_commit_in_dir(base_dir: &Path) -> io::Result<CommitResult> {
     // 6. Compute content hash
     let short_hash = sha256_short(&entry_content);
 
-    // 7. Write entry file
-    let filename = format!("{:03}_{}.md", sequence, short_hash);
-    let entry_path = history_dir.join(&filename);
+    // 8. Write entry file
+    let filename = format!("{:06}_{}.md", sequence, short_hash);
+    let entry_path = worklog_dir.join(&filename);
     fs::write(&entry_path, &entry_content)?;
 
     // 8. Append to SUMMARY.md
@@ -121,7 +128,7 @@ fn get_next_sequence(history_path: &Path) -> io::Result<u32> {
         let filename = entry.file_name();
         let filename_str = filename.to_string_lossy();
 
-        if let Some(worklog_entry) = WorklogEntry::from_filename(&filename_str, &history_path.to_path_buf()) {
+        if let Some(worklog_entry) = WorklogEntry::from_filename(&filename_str, history_path) {
             if worklog_entry.sequence > max_sequence {
                 max_sequence = worklog_entry.sequence;
             }
@@ -145,7 +152,7 @@ fn get_previous_hash(history_path: &Path, current_sequence: u32) -> io::Result<S
         let filename = entry.file_name();
         let filename_str = filename.to_string_lossy();
 
-        if let Some(worklog_entry) = WorklogEntry::from_filename(&filename_str, &history_path.to_path_buf()) {
+        if let Some(worklog_entry) = WorklogEntry::from_filename(&filename_str, history_path) {
             if worklog_entry.sequence == prev_sequence {
                 // Read the file content and compute its hash
                 let content = fs::read_to_string(&worklog_entry.path)?;
@@ -157,7 +164,7 @@ fn get_previous_hash(history_path: &Path, current_sequence: u32) -> io::Result<S
     // If we can't find the previous entry, something is wrong
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        format!("Previous entry {:03}_*.md not found", prev_sequence),
+        format!("Previous entry {:06}_*.md not found", prev_sequence),
     ))
 }
 
@@ -184,8 +191,8 @@ mod tests {
         fs::create_dir(&history_path).unwrap();
 
         // Create some entry files
-        fs::write(history_path.join("001_a1b2c3d4.md"), "content").unwrap();
-        fs::write(history_path.join("002_e5f6a7b8.md"), "content").unwrap();
+        fs::write(history_path.join("000001_a1b2c3d4.md"), "content").unwrap();
+        fs::write(history_path.join("000002_e5f6a7b8.md"), "content").unwrap();
         fs::write(history_path.join("SUMMARY.md"), "summary").unwrap(); // Should be ignored
 
         let seq = get_next_sequence(&history_path).unwrap();
@@ -209,7 +216,7 @@ mod tests {
         fs::create_dir(&history_path).unwrap();
 
         let content = "Summary: Test\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody";
-        fs::write(history_path.join("001_a1b2c3d4.md"), content).unwrap();
+        fs::write(history_path.join("000001_a1b2c3d4.md"), content).unwrap();
 
         let hash = get_previous_hash(&history_path, 2).unwrap();
         assert_eq!(hash.len(), 64); // Full SHA256 hash
@@ -235,7 +242,7 @@ mod tests {
         let dir = tempdir().unwrap();
         // Create .engram but not draft.md
         fs::create_dir(dir.path().join(".engram")).unwrap();
-        fs::create_dir(dir.path().join(".engram/history")).unwrap();
+        fs::create_dir(dir.path().join(".engram/worklog")).unwrap();
 
         let result = run_commit_in_dir(dir.path());
         assert!(result.is_err());
@@ -296,13 +303,13 @@ Compiled successfully"#;
         assert!(result.is_ok());
 
         let commit_result = result.unwrap();
-        assert!(commit_result.filename.starts_with("001_"));
+        assert!(commit_result.filename.starts_with("000001_"));
         assert!(commit_result.filename.ends_with(".md"));
         assert_eq!(commit_result.summary, "Initial setup");
         assert_eq!(commit_result.previous, "none");
 
         // Verify entry file was created
-        let history_dir = dir.path().join(".engram/history");
+        let history_dir = dir.path().join(".engram/worklog");
         let entry_path = history_dir.join(&commit_result.filename);
         assert!(entry_path.exists());
 
@@ -312,7 +319,8 @@ Compiled successfully"#;
         assert!(entry_content.contains("Previous: none"));
 
         // Verify SUMMARY.md was updated
-        let summary_content = fs::read_to_string(dir.path().join(".engram/history/SUMMARY.md")).unwrap();
+        let summary_content =
+            fs::read_to_string(dir.path().join(".engram/worklog/SUMMARY.md")).unwrap();
         assert!(summary_content.contains(&commit_result.filename));
         assert!(summary_content.contains("Initial setup"));
 
@@ -327,11 +335,13 @@ Compiled successfully"#;
         setup_engram_dir(dir.path());
 
         // Create first entry manually
-        let first_entry_content = "Summary: First\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nFirst body";
+        let first_entry_content =
+            "Summary: First\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nFirst body";
         fs::write(
-            dir.path().join(".engram/history/001_a1b2c3d4.md"),
+            dir.path().join(".engram/worklog/000001_a1b2c3d4.md"),
             first_entry_content,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Write valid draft for second entry
         let draft_content = r#"<summary>Second commit</summary>
@@ -350,13 +360,16 @@ Tests pass"#;
         assert!(result.is_ok());
 
         let commit_result = result.unwrap();
-        assert!(commit_result.filename.starts_with("002_"));
+        assert!(commit_result.filename.starts_with("000002_"));
         assert_eq!(commit_result.summary, "Second commit");
         // Previous should be the hash of first entry content
         assert_eq!(commit_result.previous, sha256_hex(first_entry_content));
 
         // Verify entry file contains correct previous hash
-        let entry_path = dir.path().join(".engram/history").join(&commit_result.filename);
+        let entry_path = dir
+            .path()
+            .join(".engram/worklog")
+            .join(&commit_result.filename);
         let entry_content = fs::read_to_string(&entry_path).unwrap();
         assert!(entry_content.contains(&format!("Previous: {}", sha256_hex(first_entry_content))));
     }
@@ -364,10 +377,10 @@ Tests pass"#;
     /// Helper to set up a valid .engram directory structure for testing
     fn setup_engram_dir(base: &Path) {
         use crate::templates::SUMMARY_TEMPLATE;
-        
+
         fs::create_dir(base.join(".engram")).unwrap();
-        fs::create_dir(base.join(".engram/history")).unwrap();
-        fs::write(base.join(".engram/history/SUMMARY.md"), SUMMARY_TEMPLATE).unwrap();
+        fs::create_dir(base.join(".engram/worklog")).unwrap();
+        fs::write(base.join(".engram/worklog/SUMMARY.md"), SUMMARY_TEMPLATE).unwrap();
         fs::write(base.join(".engram/draft.md"), DRAFT_TEMPLATE).unwrap();
     }
 }

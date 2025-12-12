@@ -8,7 +8,7 @@ use crate::engram::worklog::WorklogEntry;
 use crate::utils::hash::{sha256_hex, sha256_short};
 
 const ENGRAM_DIR: &str = ".engram";
-const HISTORY_DIR: &str = ".engram/history";
+const WORKLOG_DIR: &str = ".engram/worklog";
 
 /// Exit codes per spec
 const EXIT_SUCCESS: i32 = 0;
@@ -19,7 +19,7 @@ const EXIT_NOT_INITIALIZED: i32 = 2;
 #[derive(Debug)]
 pub struct VerifyResult {
     pub entry_count: usize,
-    pub first_entry: Option<(String, String)>,  // (filename, date)
+    pub first_entry: Option<(String, String)>, // (filename, date)
     pub latest_entry: Option<(String, String)>, // (filename, date)
 }
 
@@ -52,13 +52,27 @@ impl std::fmt::Display for VerifyError {
             VerifyError::NotInitialized => {
                 write!(f, "Engram not initialized. Run `engram init` first.")
             }
-            VerifyError::ChainBroken { filename, expected, found } => {
-                write!(f, "Chain broken at entry {}\nExpected Previous: {}\nFound Previous: {}", 
-                       filename, expected, found)
+            VerifyError::ChainBroken {
+                filename,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "Chain broken at entry {}\nExpected Previous: {}\nFound Previous: {}",
+                    filename, expected, found
+                )
             }
-            VerifyError::HashMismatch { filename, content_hash, filename_hash } => {
-                write!(f, "Hash mismatch at {}\nContent hashes to: {}\nFilename claims: {}", 
-                       filename, content_hash, filename_hash)
+            VerifyError::HashMismatch {
+                filename,
+                content_hash,
+                filename_hash,
+            } => {
+                write!(
+                    f,
+                    "Hash mismatch at {}\nContent hashes to: {}\nFilename claims: {}",
+                    filename, content_hash, filename_hash
+                )
             }
             VerifyError::MissingPreviousLine(filename) => {
                 write!(f, "Missing 'Previous:' line in {}", filename)
@@ -92,22 +106,30 @@ pub fn run() -> io::Result<()> {
             eprintln!("Engram not initialized. Run `engram init` first.");
             process::exit(EXIT_NOT_INITIALIZED);
         }
-        Err(VerifyError::ChainBroken { filename, expected, found }) => {
+        Err(VerifyError::ChainBroken {
+            filename,
+            expected,
+            found,
+        }) => {
             eprintln!("✗ Chain broken at entry {}", filename);
             eprintln!();
             eprintln!("Expected Previous: {}", expected);
             eprintln!("Found Previous:    {}", found);
             eprintln!();
-            eprintln!("The history has been tampered with or corrupted.");
+            eprintln!("The worklog has been tampered with or corrupted.");
             process::exit(EXIT_CHAIN_BROKEN);
         }
-        Err(VerifyError::HashMismatch { filename, content_hash, filename_hash }) => {
+        Err(VerifyError::HashMismatch {
+            filename,
+            content_hash,
+            filename_hash,
+        }) => {
             eprintln!("✗ Hash mismatch at {}", filename);
             eprintln!();
             eprintln!("Content hashes to: {}", content_hash);
             eprintln!("Filename claims:   {}", filename_hash);
             eprintln!();
-            eprintln!("The history has been tampered with or corrupted.");
+            eprintln!("The worklog has been tampered with or corrupted.");
             process::exit(EXIT_CHAIN_BROKEN);
         }
         Err(VerifyError::MissingPreviousLine(filename)) => {
@@ -129,15 +151,15 @@ pub fn verify_chain() -> Result<VerifyResult, VerifyError> {
 /// Verification logic with configurable base directory for testing
 pub fn verify_chain_in_dir(base_dir: &Path) -> Result<VerifyResult, VerifyError> {
     let engram_dir = base_dir.join(ENGRAM_DIR);
-    let history_dir = base_dir.join(HISTORY_DIR);
+    let worklog_dir = base_dir.join(WORKLOG_DIR);
 
     // 1. Validate environment
-    if !engram_dir.exists() || !history_dir.exists() {
+    if !engram_dir.exists() || !worklog_dir.exists() {
         return Err(VerifyError::NotInitialized);
     }
 
     // 2. List and sort entries by sequence number
-    let mut entries = collect_entries(&history_dir)?;
+    let mut entries = collect_entries(&worklog_dir)?;
 
     if entries.is_empty() {
         return Ok(VerifyResult {
@@ -206,7 +228,7 @@ pub fn verify_chain_in_dir(base_dir: &Path) -> Result<VerifyResult, VerifyError>
     })
 }
 
-/// Collect all valid worklog entries from the history directory
+/// Collect all valid worklog entries from the worklog directory
 fn collect_entries(history_path: &Path) -> io::Result<Vec<WorklogEntry>> {
     let mut entries = Vec::new();
 
@@ -215,8 +237,8 @@ fn collect_entries(history_path: &Path) -> io::Result<Vec<WorklogEntry>> {
         let filename = dir_entry.file_name();
         let filename_str = filename.to_string_lossy();
 
-        // Only process valid entry files (NNN_HHHHHHHH.md pattern)
-        if let Some(entry) = WorklogEntry::from_filename(&filename_str, &history_path.to_path_buf()) {
+        // Only process valid entry files (NNNNNN_HHHHHHHH.md pattern)
+        if let Some(entry) = WorklogEntry::from_filename(&filename_str, history_path) {
             entries.push(entry);
         }
     }
@@ -247,8 +269,8 @@ mod tests {
         fs::create_dir(&history_path).unwrap();
 
         // Create some entry files
-        fs::write(history_path.join("001_a1b2c3d4.md"), "content").unwrap();
-        fs::write(history_path.join("002_e5f6a7b8.md"), "content").unwrap();
+        fs::write(history_path.join("000001_a1b2c3d4.md"), "content").unwrap();
+        fs::write(history_path.join("000002_e5f6a7b8.md"), "content").unwrap();
         fs::write(history_path.join("SUMMARY.md"), "summary").unwrap(); // Should be ignored
 
         let entries = collect_entries(&history_path).unwrap();
@@ -262,9 +284,9 @@ mod tests {
         fs::create_dir(&history_path).unwrap();
 
         // Create entries out of order
-        fs::write(history_path.join("003_11111111.md"), "content").unwrap();
-        fs::write(history_path.join("001_a1b2c3d4.md"), "content").unwrap();
-        fs::write(history_path.join("002_e5f6a7b8.md"), "content").unwrap();
+        fs::write(history_path.join("000003_11111111.md"), "content").unwrap();
+        fs::write(history_path.join("000001_a1b2c3d4.md"), "content").unwrap();
+        fs::write(history_path.join("000002_e5f6a7b8.md"), "content").unwrap();
 
         let mut entries = collect_entries(&history_path).unwrap();
         entries.sort_by_key(|e| e.sequence);
@@ -317,8 +339,8 @@ mod tests {
         // Create a valid first entry with correct hash in filename
         let content = "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody content";
         let short_hash = sha256_short(content);
-        let filename = format!("001_{}.md", short_hash);
-        fs::write(dir.path().join(".engram/history").join(&filename), content).unwrap();
+        let filename = format!("000001_{}.md", short_hash);
+        fs::write(dir.path().join(".engram/worklog").join(&filename), content).unwrap();
 
         let result = verify_chain_in_dir(dir.path());
         assert!(result.is_ok());
@@ -337,17 +359,29 @@ mod tests {
         setup_engram_dir(dir.path());
 
         // Create first entry
-        let content1 = "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody 1";
+        let content1 =
+            "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody 1";
         let short_hash1 = sha256_short(content1);
-        let filename1 = format!("001_{}.md", short_hash1);
-        fs::write(dir.path().join(".engram/history").join(&filename1), content1).unwrap();
+        let filename1 = format!("000001_{}.md", short_hash1);
+        fs::write(
+            dir.path().join(".engram/worklog").join(&filename1),
+            content1,
+        )
+        .unwrap();
 
         // Create second entry with correct previous hash
         let prev_hash = sha256_hex(content1);
-        let content2 = format!("Summary: Second entry\nPrevious: {}\nDate: 2025-06-13T10:00:00Z\n\n---\n\nBody 2", prev_hash);
+        let content2 = format!(
+            "Summary: Second entry\nPrevious: {}\nDate: 2025-06-13T10:00:00Z\n\n---\n\nBody 2",
+            prev_hash
+        );
         let short_hash2 = sha256_short(&content2);
-        let filename2 = format!("002_{}.md", short_hash2);
-        fs::write(dir.path().join(".engram/history").join(&filename2), &content2).unwrap();
+        let filename2 = format!("000002_{}.md", short_hash2);
+        fs::write(
+            dir.path().join(".engram/worklog").join(&filename2),
+            &content2,
+        )
+        .unwrap();
 
         let result = verify_chain_in_dir(dir.path());
         assert!(result.is_ok());
@@ -364,23 +398,39 @@ mod tests {
         setup_engram_dir(dir.path());
 
         // Create first entry
-        let content1 = "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody 1";
+        let content1 =
+            "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody 1";
         let short_hash1 = sha256_short(content1);
-        let filename1 = format!("001_{}.md", short_hash1);
-        fs::write(dir.path().join(".engram/history").join(&filename1), content1).unwrap();
+        let filename1 = format!("000001_{}.md", short_hash1);
+        fs::write(
+            dir.path().join(".engram/worklog").join(&filename1),
+            content1,
+        )
+        .unwrap();
 
         // Create second entry with WRONG previous hash
         let wrong_prev = "0000000000000000000000000000000000000000000000000000000000000000";
-        let content2 = format!("Summary: Second entry\nPrevious: {}\nDate: 2025-06-13T10:00:00Z\n\n---\n\nBody 2", wrong_prev);
+        let content2 = format!(
+            "Summary: Second entry\nPrevious: {}\nDate: 2025-06-13T10:00:00Z\n\n---\n\nBody 2",
+            wrong_prev
+        );
         let short_hash2 = sha256_short(&content2);
-        let filename2 = format!("002_{}.md", short_hash2);
-        fs::write(dir.path().join(".engram/history").join(&filename2), &content2).unwrap();
+        let filename2 = format!("000002_{}.md", short_hash2);
+        fs::write(
+            dir.path().join(".engram/worklog").join(&filename2),
+            &content2,
+        )
+        .unwrap();
 
         let result = verify_chain_in_dir(dir.path());
         assert!(result.is_err());
 
         match result {
-            Err(VerifyError::ChainBroken { filename, expected, found }) => {
+            Err(VerifyError::ChainBroken {
+                filename,
+                expected,
+                found,
+            }) => {
                 assert_eq!(filename, filename2);
                 assert_eq!(expected, sha256_hex(content1));
                 assert_eq!(found, wrong_prev);
@@ -397,16 +447,21 @@ mod tests {
         // Create first entry with wrong Previous (should be "none")
         let content = "Summary: First entry\nPrevious: 0000000000000000000000000000000000000000000000000000000000000000\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody";
         let short_hash = sha256_short(content);
-        let filename = format!("001_{}.md", short_hash);
-        fs::write(dir.path().join(".engram/history").join(&filename), content).unwrap();
+        let filename = format!("000001_{}.md", short_hash);
+        fs::write(dir.path().join(".engram/worklog").join(&filename), content).unwrap();
 
         let result = verify_chain_in_dir(dir.path());
         assert!(result.is_err());
 
         match result {
-            Err(VerifyError::ChainBroken { expected, found, .. }) => {
+            Err(VerifyError::ChainBroken {
+                expected, found, ..
+            }) => {
                 assert_eq!(expected, "none");
-                assert_eq!(found, "0000000000000000000000000000000000000000000000000000000000000000");
+                assert_eq!(
+                    found,
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                );
             }
             _ => panic!("Expected ChainBroken error"),
         }
@@ -418,17 +473,22 @@ mod tests {
         setup_engram_dir(dir.path());
 
         // Create entry with correct Previous but wrong filename hash
-        let content = "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody";
+        let content =
+            "Summary: First entry\nPrevious: none\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody";
         // Use a wrong hash in filename (not matching content)
         let wrong_hash = "00000000";
-        let filename = format!("001_{}.md", wrong_hash);
-        fs::write(dir.path().join(".engram/history").join(&filename), content).unwrap();
+        let filename = format!("000001_{}.md", wrong_hash);
+        fs::write(dir.path().join(".engram/worklog").join(&filename), content).unwrap();
 
         let result = verify_chain_in_dir(dir.path());
         assert!(result.is_err());
 
         match result {
-            Err(VerifyError::HashMismatch { filename: f, content_hash, filename_hash }) => {
+            Err(VerifyError::HashMismatch {
+                filename: f,
+                content_hash,
+                filename_hash,
+            }) => {
                 assert_eq!(f, filename);
                 assert_eq!(content_hash, sha256_short(content));
                 assert_eq!(filename_hash, wrong_hash);
@@ -445,8 +505,8 @@ mod tests {
         // Create entry without Previous: line
         let content = "Summary: First entry\nDate: 2025-06-12T14:32:07Z\n\n---\n\nBody";
         let short_hash = sha256_short(content);
-        let filename = format!("001_{}.md", short_hash);
-        fs::write(dir.path().join(".engram/history").join(&filename), content).unwrap();
+        let filename = format!("000001_{}.md", short_hash);
+        fs::write(dir.path().join(".engram/worklog").join(&filename), content).unwrap();
 
         let result = verify_chain_in_dir(dir.path());
         assert!(result.is_err());
@@ -462,6 +522,6 @@ mod tests {
     /// Helper to set up a valid .engram directory structure for testing
     fn setup_engram_dir(base: &std::path::Path) {
         fs::create_dir(base.join(".engram")).unwrap();
-        fs::create_dir(base.join(".engram/history")).unwrap();
+        fs::create_dir(base.join(".engram/worklog")).unwrap();
     }
 }

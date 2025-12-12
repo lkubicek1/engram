@@ -1,13 +1,16 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::templates::{AGENTS_TEMPLATE, DRAFT_TEMPLATE, ROOT_DIRECTIVE_TEMPLATE, SUMMARY_TEMPLATE};
+use crate::templates::{
+    AGENTS_TEMPLATE, DRAFT_TEMPLATE, ROOT_DIRECTIVE_TEMPLATE, SUMMARY_TEMPLATE,
+    WRAPPER_CMD_TEMPLATE, WRAPPER_SH_TEMPLATE,
+};
 
 /// Directory name for engram data
 const ENGRAM_DIR: &str = ".engram";
-/// Directory name for history entries
-const HISTORY_DIR: &str = "history";
+/// Directory name for worklog entries
+const WORKLOG_DIR: &str = "worklog";
 /// Marker to detect if Engram directive already exists in a file
 const ENGRAM_MARKER: &str = "Engram Protocol";
 
@@ -39,7 +42,7 @@ impl std::fmt::Display for InitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InitError::AlreadyInitialized => {
-                write!(f, "Engram already initialized. Use --force to reinitialize.")
+                write!(f, "Engram already initialized (found .engram/).")
             }
             InitError::IoError(e) => write!(f, "I/O error: {}", e),
         }
@@ -59,7 +62,7 @@ pub fn run(options: InitOptions) -> io::Result<()> {
     match run_init_in_dir(&cwd, options) {
         Ok(()) => Ok(()),
         Err(InitError::AlreadyInitialized) => {
-            eprintln!("Error: Engram already initialized. Use --force to reinitialize.");
+            eprintln!("Error: Engram already initialized (found .engram/).");
             std::process::exit(1);
         }
         Err(InitError::IoError(e)) => {
@@ -73,7 +76,7 @@ pub fn run(options: InitOptions) -> io::Result<()> {
 /// This is used by tests to avoid race conditions with `set_current_dir`.
 fn run_init_in_dir(cwd: &Path, options: InitOptions) -> Result<(), InitError> {
     let engram_dir = cwd.join(ENGRAM_DIR);
-    let history_dir = engram_dir.join(HISTORY_DIR);
+    let worklog_dir = engram_dir.join(WORKLOG_DIR);
 
     // Check idempotency: if .engram/ already exists, return error
     if engram_dir.exists() {
@@ -82,7 +85,7 @@ fn run_init_in_dir(cwd: &Path, options: InitOptions) -> Result<(), InitError> {
 
     // Create directory structure
     fs::create_dir(&engram_dir)?;
-    fs::create_dir(&history_dir)?;
+    fs::create_dir(&worklog_dir)?;
 
     // Create .engram/AGENTS.md with full protocol instructions
     let agents_path = engram_dir.join("AGENTS.md");
@@ -92,15 +95,51 @@ fn run_init_in_dir(cwd: &Path, options: InitOptions) -> Result<(), InitError> {
     let draft_path = engram_dir.join("draft.md");
     fs::write(&draft_path, DRAFT_TEMPLATE)?;
 
-    // Create .engram/history/SUMMARY.md with header only
-    let summary_path = history_dir.join("SUMMARY.md");
+    // Create .engram/worklog/SUMMARY.md with header only
+    let summary_path = worklog_dir.join("SUMMARY.md");
     fs::write(&summary_path, SUMMARY_TEMPLATE)?;
+
+    // Create .engram/.gitignore (ignore downloaded binaries)
+    let engram_gitignore_path = engram_dir.join(".gitignore");
+    fs::write(&engram_gitignore_path, "bin/\n")?;
+
+    // Create .engram/.gitattributes (force LF line endings for stable hashing)
+    let engram_gitattributes_path = engram_dir.join(".gitattributes");
+    fs::write(&engram_gitattributes_path, "* text eol=lf\n")?;
+
+    // Create per-repo wrapper scripts (so fresh clones can run `./engram ...`)
+    let wrapper_report = write_wrappers(cwd)?;
 
     // Print success output
     println!("Initialized Engram in {}", cwd.display());
     println!("Created: {}", relative_path(cwd, &agents_path));
     println!("Created: {}", relative_path(cwd, &draft_path));
     println!("Created: {}", relative_path(cwd, &summary_path));
+    println!("Created: {}", relative_path(cwd, &engram_gitignore_path));
+    println!(
+        "Created: {}",
+        relative_path(cwd, &engram_gitattributes_path)
+    );
+
+    match wrapper_report.sh_status {
+        WriteStatus::Created => {
+            println!("Created: {}", relative_path(cwd, &wrapper_report.sh_path))
+        }
+        WriteStatus::SkippedAlreadyExists => println!(
+            "Skipped: {} (already exists)",
+            relative_path(cwd, &wrapper_report.sh_path)
+        ),
+    }
+
+    match wrapper_report.cmd_status {
+        WriteStatus::Created => {
+            println!("Created: {}", relative_path(cwd, &wrapper_report.cmd_path))
+        }
+        WriteStatus::SkippedAlreadyExists => println!(
+            "Skipped: {} (already exists)",
+            relative_path(cwd, &wrapper_report.cmd_path)
+        ),
+    }
 
     // Handle root-level AI agent instruction files
     handle_root_level_files(cwd, &options)?;
@@ -125,23 +164,23 @@ fn handle_root_level_files(cwd: &Path, options: &InitOptions) -> Result<(), Init
         // Detection mode: check for existing files and apply defaults
         let warp_exists = cwd.join("WARP.md").exists();
         let junie_dir_exists = cwd.join(".junie").exists();
-        
+
         if warp_exists {
             // WARP.md exists, append to it
             handle_warp_file(cwd)?;
         }
-        
+
         if junie_dir_exists {
             // .junie/ directory exists, append to guidelines.md
             handle_junie_file(cwd)?;
         }
-        
+
         if !warp_exists && !junie_dir_exists {
             // Neither exists, create AGENTS.md in project root by default
             handle_root_agents_file(cwd)?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -155,13 +194,17 @@ fn handle_warp_file(cwd: &Path) -> Result<(), InitError> {
 fn handle_junie_file(cwd: &Path) -> Result<(), InitError> {
     let junie_dir = cwd.join(".junie");
     let guidelines_path = junie_dir.join("guidelines.md");
-    
+
     // Create .junie directory if it doesn't exist
     if !junie_dir.exists() {
         fs::create_dir(&junie_dir)?;
     }
-    
-    handle_directive_file(&guidelines_path, ".junie/guidelines.md", "# Junie AI Guidelines")
+
+    handle_directive_file(
+        &guidelines_path,
+        ".junie/guidelines.md",
+        "# Junie AI Guidelines",
+    )
 }
 
 /// Handle root AGENTS.md file (create or append)
@@ -171,17 +214,24 @@ fn handle_root_agents_file(cwd: &Path) -> Result<(), InitError> {
 }
 
 /// Generic handler for directive files - creates or appends as needed
-fn handle_directive_file(path: &Path, display_name: &str, default_header: &str) -> Result<(), InitError> {
+fn handle_directive_file(
+    path: &Path,
+    display_name: &str,
+    default_header: &str,
+) -> Result<(), InitError> {
     if path.exists() {
         // File exists - check for existing directive and append if not present
         let content = fs::read_to_string(path)?;
-        
+
         // Idempotency check: don't append if directive already exists
         if content.contains(ENGRAM_MARKER) {
-            println!("Skipped: {} (Engram directive already present)", display_name);
+            println!(
+                "Skipped: {} (Engram directive already present)",
+                display_name
+            );
             return Ok(());
         }
-        
+
         // Append directive after the first heading (if any)
         let new_content = append_directive_after_heading(&content);
         fs::write(path, new_content)?;
@@ -192,32 +242,32 @@ fn handle_directive_file(path: &Path, display_name: &str, default_header: &str) 
         fs::write(path, content)?;
         println!("Created: {}", display_name);
     }
-    
+
     Ok(())
 }
 
 /// Append the directive after the first level-1 heading, or at the start if no heading found
 fn append_directive_after_heading(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
-    
+
     // Find the first level-1 heading (starts with "# ")
     let heading_index = lines.iter().position(|line| line.starts_with("# "));
-    
+
     match heading_index {
         Some(idx) => {
             // Insert directive after the heading line
             let mut result = String::new();
-            
+
             // Add lines up to and including the heading
             for line in &lines[..=idx] {
                 result.push_str(line);
                 result.push('\n');
             }
-            
+
             // Add blank line and directive
             result.push('\n');
             result.push_str(ROOT_DIRECTIVE_TEMPLATE);
-            
+
             // Add remaining content
             if idx + 1 < lines.len() {
                 for line in &lines[idx + 1..] {
@@ -225,7 +275,7 @@ fn append_directive_after_heading(content: &str) -> String {
                     result.push('\n');
                 }
             }
-            
+
             result
         }
         None => {
@@ -233,6 +283,62 @@ fn append_directive_after_heading(content: &str) -> String {
             format!("{}\n{}", ROOT_DIRECTIVE_TEMPLATE, content)
         }
     }
+}
+
+enum WriteStatus {
+    Created,
+    SkippedAlreadyExists,
+}
+
+struct WrapperWriteReport {
+    sh_path: PathBuf,
+    sh_status: WriteStatus,
+    cmd_path: PathBuf,
+    cmd_status: WriteStatus,
+}
+
+fn write_wrappers(cwd: &Path) -> io::Result<WrapperWriteReport> {
+    let version = env!("CARGO_PKG_VERSION");
+
+    let sh_path = cwd.join("engram");
+    let sh_status = if sh_path.exists() {
+        WriteStatus::SkippedAlreadyExists
+    } else {
+        let wrapper_sh = WRAPPER_SH_TEMPLATE.replace("__ENGRAM_VERSION__", version);
+        fs::write(&sh_path, wrapper_sh)?;
+        set_executable(&sh_path)?;
+        WriteStatus::Created
+    };
+
+    let cmd_path = cwd.join("engram.cmd");
+    let cmd_status = if cmd_path.exists() {
+        WriteStatus::SkippedAlreadyExists
+    } else {
+        let wrapper_cmd = WRAPPER_CMD_TEMPLATE.replace("__ENGRAM_VERSION__", version);
+        fs::write(&cmd_path, wrapper_cmd)?;
+        WriteStatus::Created
+    };
+
+    Ok(WrapperWriteReport {
+        sh_path,
+        sh_status,
+        cmd_path,
+        cmd_status,
+    })
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// Helper to display relative path from current directory
@@ -258,8 +364,16 @@ mod tests {
         // Verify directory structure
         assert!(temp_dir.path().join(".engram").exists());
         assert!(temp_dir.path().join(".engram").is_dir());
-        assert!(temp_dir.path().join(".engram/history").exists());
-        assert!(temp_dir.path().join(".engram/history").is_dir());
+        assert!(temp_dir.path().join(".engram/worklog").exists());
+        assert!(temp_dir.path().join(".engram/worklog").is_dir());
+
+        // Verify wrapper scripts
+        assert!(temp_dir.path().join("engram").exists());
+        assert!(temp_dir.path().join("engram.cmd").exists());
+
+        // Verify hygiene files
+        assert!(temp_dir.path().join(".engram/.gitignore").exists());
+        assert!(temp_dir.path().join(".engram/.gitattributes").exists());
     }
 
     #[test]
@@ -298,7 +412,7 @@ mod tests {
         let result = run_init_in_dir(temp_dir.path(), InitOptions::default());
         assert!(result.is_ok());
 
-        let summary_path = temp_dir.path().join(".engram/history/SUMMARY.md");
+        let summary_path = temp_dir.path().join(".engram/worklog/SUMMARY.md");
         assert!(summary_path.exists());
         let content = fs::read_to_string(&summary_path).unwrap();
         assert!(content.contains("| Entry | Summary |"));
@@ -410,7 +524,11 @@ mod tests {
 
         // Create existing WARP.md
         let warp_path = temp_dir.path().join("WARP.md");
-        fs::write(&warp_path, "# My Warp Instructions\n\nSome existing content.\n").unwrap();
+        fs::write(
+            &warp_path,
+            "# My Warp Instructions\n\nSome existing content.\n",
+        )
+        .unwrap();
 
         let options = InitOptions {
             warp: true,
@@ -431,7 +549,11 @@ mod tests {
 
         // Create existing WARP.md with Engram Protocol already present
         let warp_path = temp_dir.path().join("WARP.md");
-        fs::write(&warp_path, "# Warp\n\n## Engram Protocol\n\nAlready here.\n").unwrap();
+        fs::write(
+            &warp_path,
+            "# Warp\n\n## Engram Protocol\n\nAlready here.\n",
+        )
+        .unwrap();
 
         let options = InitOptions {
             warp: true,
@@ -505,7 +627,7 @@ mod tests {
     fn test_append_directive_after_heading() {
         let content = "# My Title\n\nSome content here.\n\n## Section\n\nMore content.\n";
         let result = append_directive_after_heading(content);
-        
+
         // Should have heading first, then directive, then rest of content
         assert!(result.starts_with("# My Title\n"));
         assert!(result.contains("Engram Protocol"));
@@ -516,7 +638,7 @@ mod tests {
     fn test_append_directive_no_heading() {
         let content = "Just some content without a heading.\n";
         let result = append_directive_after_heading(content);
-        
+
         // Directive should be prepended
         assert!(result.starts_with("## 🔒 Engram Protocol"));
         assert!(result.contains("Just some content without a heading."));
