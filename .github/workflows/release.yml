@@ -61,6 +61,7 @@ jobs:
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
+          if-no-files-found: error
 
   release:
     name: Publish
@@ -76,8 +77,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          find dist -type f -maxdepth 2 -mindepth 2 -exec mv {} dist/ \;
-          find dist -type d -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+          # download-artifact v4 extracts each artifact into dist/<artifact-name>/...
+          # which can collide with asset filenames (artifact name == asset name). To avoid
+          # name collisions, move binaries to a temp dir first, then wipe dist/, then move back.
+
+          tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t engram)
+          cleanup() { rm -rf "$tmp_dir"; }
+          trap cleanup EXIT INT TERM
+
+          found=0
+          while IFS= read -r -d '' f; do
+            mv "$f" "$tmp_dir"/
+            found=1
+          done < <(find dist -type f -name 'engram-*' -print0)
+
+          if [ "$found" -eq 0 ]; then
+            echo "Error: no engram-* files found after downloading artifacts" >&2
+            find dist -maxdepth 4 -print >&2 || true
+            exit 1
+          fi
+
+          rm -rf dist/*
+          mv "$tmp_dir"/* dist/
 
       - name: Generate checksums
         shell: bash
